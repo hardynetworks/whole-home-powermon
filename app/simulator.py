@@ -161,8 +161,8 @@ def backfill(store: Store, tz: str, days: int, now: int | None = None) -> int:
     return len(rows)
 
 
-async def live_loop(store: Store, tz: str, interval: float = 10.0) -> None:
-    """Append a simulated reading every `interval` seconds."""
+async def live_loop(store: Store, tz: str, interval: float = 1.0) -> None:
+    """Append a simulated reading every `interval` seconds (1 s, so the live graph moves)."""
     sim = Simulator(tz, seed=int(time.time()))
     sim.soc = store.get_setting("sim_soc", 0.55)
     while True:

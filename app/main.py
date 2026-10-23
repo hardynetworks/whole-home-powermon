@@ -218,6 +218,12 @@ def create_app(db_path: str | None = None, demo: bool | None = None, ingest_key:
             "today": {"totals": sm["totals"], "by_tier": sm["by_tier"]},
         }
 
+    @app.get("/api/live/history")
+    def live_history(since: int = 0, seconds: int = Query(default=300, ge=10, le=900)):
+        now = int(time.time())
+        floor = max(since, now - seconds)
+        return {"now": now, "points": analytics.live_history(store, floor)}
+
     # ---------------------------------------------------------------- day
     @app.get("/api/day")
     def day(date_: str | None = Query(default=None, alias="date")):

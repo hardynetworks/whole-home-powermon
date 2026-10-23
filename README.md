@@ -34,7 +34,7 @@ python3 collector.py -c collector.json --check   # read once, print, send nothin
 python3 collector.py -c collector.json
 ```
 
-Standard library only, so it runs on the Pi 2B's stock Python. Readings are held in memory and resent if the server is down.
+`interval_seconds` is 1 in the example, which gives the per-second Live graph. Raise it if a device can't be polled that often. Standard library only, so it runs on the Pi 2B's stock Python. Readings are held in memory and resent if the server is down.
 
 | Source | Status |
 |---|---|

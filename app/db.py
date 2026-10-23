@@ -14,6 +14,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 SCHEMA = """
@@ -45,6 +46,8 @@ class Store:
             self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
         self.latest: dict[str, tuple[int, float]] = {}
+        # Recent raw readings per channel for the live graph: (epoch_seconds, watts), about 15 min at 1 Hz.
+        self.recent: dict[str, deque] = {}
         self._load_latest()
 
     # ---- settings -------------------------------------------------------
@@ -74,10 +77,15 @@ class Store:
                 rows,
             )
             self.conn.commit()
-        for ts, ch, w in samples:
-            prev = self.latest.get(ch)
-            if prev is None or int(ts) >= prev[0]:
-                self.latest[ch] = (int(ts), float(w))
+        with self.lock:
+            for ts, ch, w in samples:
+                prev = self.latest.get(ch)
+                if prev is None or int(ts) >= prev[0]:
+                    self.latest[ch] = (int(ts), float(w))
+                if ch in ("grid", "solar", "battery"):
+                    q = self.recent.setdefault(ch, deque(maxlen=900))
+                    if not q or int(ts) >= q[-1][0]:
+                        q.append((int(ts), float(w)))
         return len(rows)
 
     def bulk_insert(self, rows: list[tuple[int, str, float]]) -> None:
@@ -101,6 +109,10 @@ class Store:
                     (row["channel"], row["ts_min"]),
                 ).fetchone()
                 self.latest[row["channel"]] = (row["ts_min"] * 60, value["avg_w"])
+
+    def recent_points(self, since: int) -> dict[str, list[tuple[int, float]]]:
+        with self.lock:
+            return {ch: [p for p in q if p[0] > since] for ch, q in self.recent.items()}
 
     def count(self) -> int:
         with self.lock:

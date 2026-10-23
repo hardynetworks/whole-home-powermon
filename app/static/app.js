@@ -92,6 +92,7 @@ function makeChart(key, canvas, config) {
 function clearView() {
   timers.forEach(clearInterval);
   timers = [];
+  if (typeof liveCleanup === 'function') { liveCleanup(); liveCleanup = null; }
   charts.forEach((c) => c.destroy());
   charts.clear();
 }
@@ -154,6 +155,139 @@ function hbars(items, fmtRight, color) {
     h('div', { class: 'bar', role: 'presentation' }, h('i', { style: { width: `${Math.max(2, (i.value / max) * 100)}%`, background: i.dot || color || '' } }))));
 }
 
+/* ------------------------------------------------------------------ LIVE GRAPH (1 s refresh) */
+function liveGraph() {
+  let win = 300;                 // seconds shown
+  let paused = false;
+  let lastT = 0;
+  let skew = 0;                  // server clock minus this browser's clock, in seconds
+  let busy = false;
+  let pts = [];
+  const seen = { solar: false, battery: false };
+  const nowEst = () => Date.now() / 1000 + skew;
+  const clock = (ts) => tzFmt({ hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(ts * 1000));
+
+  const canvas = h('canvas', { role: 'img', 'aria-label': 'Live power for the last few minutes' });
+  const readout = h('div', { class: 'live-readout', 'aria-live': 'off' });
+  const note = h('p', { class: 'muted small' });
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Time window' });
+  const pauseBtn = h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    pauseBtn.setAttribute('aria-pressed', String(paused));
+    if (!paused) tick();
+  } }, 'Pause');
+  const WINDOWS = [[60, '1 min'], [300, '5 min'], [900, '15 min']];
+  const drawSeg = () => seg.replaceChildren(...WINDOWS.map(([w, label]) => h('button', {
+    type: 'button', class: w === win ? 'active' : '', 'aria-pressed': String(w === win),
+    onclick: () => { win = w; drawSeg(); redraw(); },
+  }, label)));
+  drawSeg();
+
+  const defs = [
+    { key: 'load', label: 'Home', color: css('--c-load'), fill: true },
+    { key: 'grid', label: 'Grid', color: css('--c-grid') },
+    { key: 'solar', label: 'Solar', color: css('--c-solar') },
+    { key: 'battery', label: 'Battery', color: css('--c-battery') },
+  ];
+  let chart = null;
+  const buildChart = () => makeChart('live', canvas, {
+    type: 'line',
+    data: { datasets: defs.map((d) => ({
+      label: d.label, data: [], borderColor: d.color, backgroundColor: alpha(d.color, 0.14), fill: d.fill ? 'origin' : false,
+      borderWidth: 2, pointRadius: 0, pointHoverRadius: 3, tension: 0.15, spanGaps: false, hidden: d.key === 'solar' || d.key === 'battery',
+    })) },
+    options: {
+      responsive: true, maintainAspectRatio: false, parsing: false, animation: false,
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      scales: {
+        x: { type: 'linear', ticks: { maxTicksLimit: 6, callback: (v) => clock(v) }, grid: { display: false } },
+        y: { title: { display: true, text: 'kW' }, grid: { color: css('--line') } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          title: (items) => (items[0] ? clock(items[0].parsed.x) : ''),
+          label: (c) => `${c.dataset.label}: ${powerText(c.parsed.y * 1000)}`,
+        } },
+      },
+    },
+  });
+
+  function redraw() {
+    if (!chart) return;
+    const now = nowEst();
+    const from = now - win;
+    chart.options.scales.x.min = from;
+    chart.options.scales.x.max = now;
+    chart.options.scales.x.ticks.stepSize = win / 5;
+    defs.forEach((d, i) => {
+      const data = [];
+      let prev = null;
+      for (const p of pts) {
+        if (p.t < from - 5) continue;
+        const v = p[d.key];
+        if (v == null) continue;
+        if (prev != null && p.t - prev > 60) data.push({ x: prev + 1, y: null });
+        data.push({ x: p.t, y: v / 1000 });
+        prev = p.t;
+      }
+      chart.data.datasets[i].data = data;
+      chart.data.datasets[i].hidden = (d.key === 'solar' || d.key === 'battery') ? !seen[d.key] : false;
+    });
+    chart.update('none');
+
+    const last = pts[pts.length - 1];
+    const cells = defs.filter((d) => d.key === 'load' || d.key === 'grid' || seen[d.key]).map((d) => h('div', { class: 'live-cell' },
+      h('span', { class: 'label' }, h('i', { class: 'dot', style: { background: d.color } }), d.label),
+      h('span', { class: 'live-num' }, last && last[d.key] != null ? powerText(d.key === 'load' ? last[d.key] : last[d.key]) : '—')));
+    readout.replaceChildren(...cells);
+
+    if (!last) note.textContent = 'Waiting for readings. The graph fills in as they arrive.';
+    else {
+      const age = Math.round(now - last.t);
+      const recent = pts.slice(-6);
+      const gap = recent.length > 1 ? Math.round((recent[recent.length - 1].t - recent[0].t) / (recent.length - 1)) : null;
+      note.textContent = age > 20 ? `No new reading for ${age} s. Check the collector on the Devices page.`
+        : (gap ? `New reading about every ${gap} s${gap > 1 ? '. Set interval_seconds to 1 in the collector for a per-second graph.' : '.'}` : '');
+    }
+  }
+
+  async function tick() {
+    if (paused || busy || document.hidden) return;
+    busy = true;
+    try {
+      const r = await api(`/api/live/history?since=${lastT}&seconds=900`);
+      skew = r.now - Date.now() / 1000;
+      for (const p of r.points) {
+        pts.push(p);
+        lastT = Math.max(lastT, p.t);
+        if (p.solar != null) seen.solar = true;
+        if (p.battery != null) seen.battery = true;
+      }
+      const cut = r.now - 900;
+      if (pts.length && pts[0].t < cut) pts = pts.filter((p) => p.t >= cut);
+      redraw();
+    } catch (_) { /* keep the last picture; try again next second */ }
+    busy = false;
+  }
+
+  setTimeout(() => { chart = buildChart(); tick(); }, 0);   // after the card is in the page, so it can size itself
+  timers.push(setInterval(tick, 1000));
+  const onVis = () => { if (!document.hidden) tick(); };
+  document.addEventListener('visibilitychange', onVis);
+  liveCleanup = () => document.removeEventListener('visibilitychange', onVis);
+
+  return h('section', { class: 'card' },
+    h('div', { class: 'row between' },
+      h('h2', null, h('span', { class: 'live-dot', 'aria-hidden': 'true' }), 'Live'),
+      h('div', { class: 'row' }, seg, pauseBtn)),
+    readout,
+    h('div', { class: 'chart-box short' }, canvas),
+    note);
+}
+let liveCleanup = null;
+
 /* ------------------------------------------------------------------ OVERVIEW */
 async function viewOverview() {
   let day = todayStr();
@@ -168,9 +302,10 @@ async function viewOverview() {
   const circBox = h('div');
   const dayNote = h('div');
 
+  const liveNode = liveGraph();
   const shift = (n) => { day = addDays(day, n); dateInput.value = day; loadDay(); };
   main.replaceChildren(h('div', { class: 'stack' },
-    banner, tiles,
+    banner, tiles, liveNode,
     h('section', { class: 'card' },
       h('div', { class: 'row between' },
         dayTitle,

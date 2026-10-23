@@ -307,3 +307,32 @@ def hourly_csv_rows(store: Store, cfg: dict, start: int, end: int) -> list[list]
             f"{row['exp']:.4f}", f"{row['imp'] * rate:.4f}",
         ])
     return out
+
+
+def live_history(store: Store, since: int, tol: int = 15) -> list[dict]:
+    """Raw recent readings (about 1 per collector cycle), newest last, for the live graph.
+    Solar and battery are matched to each grid reading within `tol` seconds."""
+    rec = store.recent_points(since)
+    grid = rec.get("grid", [])
+    solar = dict(rec.get("solar", []))
+    batt = dict(rec.get("battery", []))
+
+    def near(d: dict, ts: int):
+        if not d:
+            return None
+        for off in range(tol + 1):
+            for t in (ts - off, ts + off):
+                if t in d:
+                    return d[t]
+        return None
+
+    out = []
+    for ts, g in grid:
+        so, ba = near(solar, ts), near(batt, ts)
+        out.append({
+            "t": ts, "grid": round(g, 1),
+            "solar": None if so is None else round(so, 1),
+            "battery": None if ba is None else round(ba, 1),
+            "load": round(max(g + (so or 0.0) - (ba or 0.0), 0.0), 1),
+        })
+    return out

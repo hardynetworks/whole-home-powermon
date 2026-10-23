@@ -311,3 +311,17 @@ def test_switch_demo_to_real_and_back(tmp_path, monkeypatch):
 def test_mode_locked_with_db_path(client):
     r = client.post("/api/mode", json={"demo": True})
     assert r.status_code == 409
+
+
+def test_live_history_returns_raw_points(client):
+    now = int(time.time())
+    for i in range(5):
+        client.post("/api/ingest", headers={"X-API-Key": KEY},
+                    json={"ts": now - 4 + i, "readings": {"grid": 1000 + i, "solar": 400}})
+    r = client.get("/api/live/history?seconds=60").json()
+    pts = r["points"]
+    assert [p["grid"] for p in pts][-5:] == [1000, 1001, 1002, 1003, 1004]
+    assert pts[-1]["solar"] == 400 and pts[-1]["battery"] is None
+    assert pts[-1]["load"] == 1404
+    newer = client.get(f"/api/live/history?since={pts[-2]['t']}").json()["points"]
+    assert len(newer) == 1
