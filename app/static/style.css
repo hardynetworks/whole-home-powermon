@@ -26,6 +26,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
@@ -47,6 +48,8 @@ a { color: var(--accent); }
 }
 .brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; color: var(--accent); white-space: nowrap; }
 .brand span:nth-child(2) { color: var(--text); }
+button.badge { cursor: pointer; }
+button.badge:hover { background: var(--accent); color: var(--accent-ink); }
 .badge { font-size: .72rem; font-weight: 600; padding: .1rem .5rem; border-radius: 99px; background: var(--surface2); color: var(--muted); border: 1px solid var(--line); }
 .tabs { display: flex; gap: .15rem; margin-left: auto; overflow-x: auto; }
 .tabs a { padding: .4rem .75rem; border-radius: 8px; text-decoration: none; color: var(--muted); font-weight: 600; white-space: nowrap; }

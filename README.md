@@ -15,12 +15,13 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open http://localhost:8080. Demo mode fills 45 days of simulated data (kept in a separate `demo.db`).
+Open http://localhost:8855 (change `PORT` in `.env` to use another port). Demo mode fills 45 days of simulated data (kept in a separate `demo.db`).
 
 ## Use real data
 
-1. In `.env` set `DEMO_MODE=false` and `INGEST_KEY=<long random string>` (`openssl rand -hex 24`).
-2. `docker compose up -d --build`
+1. In `.env` set `INGEST_KEY=<long random string>` (`openssl rand -hex 24`), then `docker compose up -d --build`.
+2. In the app, click the **Demo data** badge (or Devices, Data source) to switch to real data. The choice is remembered.
+   Setting `DEMO_MODE=false` in `.env` before the first start does the same.
 3. Set up the collector on the Raspberry Pi (below).
 4. On the **Rates** page, enter your fixed monthly charge and riders from your bill.
 

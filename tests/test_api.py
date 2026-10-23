@@ -284,3 +284,30 @@ def test_demo_mode_boots_and_serves_data(tmp_path):
         assert d["series"]["points"]
         labels = c.get("/api/config").json()["config"]["labels"]
         assert labels["circuit:hvac"] == "Heating and cooling"
+
+
+def test_switch_demo_to_real_and_back(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DB_PATH", raising=False)
+    monkeypatch.setenv("DEMO_MODE", "true")
+    monkeypatch.setenv("DEMO_DAYS", "1")
+    with TestClient(create_app(live_demo=False)) as c:
+        assert c.get("/api/health").json()["demo"] is True
+        demo_samples = c.get("/api/health").json()["samples"]
+        assert demo_samples > 0
+        assert c.post("/api/mode", json={"demo": False}).json() == {"demo": False}
+        h = c.get("/api/health").json()
+        assert h["demo"] is False and h["samples"] == 0      # real database is empty and separate
+        assert c.get("/api/config").json()["demo"] is False
+    # the choice survives a restart even though DEMO_MODE=true is still set
+    with TestClient(create_app(live_demo=False)) as c:
+        assert c.get("/api/health").json()["demo"] is False
+        assert c.post("/api/mode", json={"demo": True}).json() == {"demo": True}
+        assert c.get("/api/health").json()["samples"] == demo_samples or c.get("/api/health").json()["samples"] > 0
+
+
+def test_mode_locked_with_db_path(client):
+    r = client.post("/api/mode", json={"demo": True})
+    assert r.status_code == 409

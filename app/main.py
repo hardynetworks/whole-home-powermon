@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
 import hmac
 import io
 import math
@@ -43,19 +44,48 @@ class IngestBody(BaseModel):
     samples: list[Sample] | None = None
 
 
+class ModeBody(BaseModel):
+    demo: bool
+
+
 class ConfigBody(BaseModel):
     config: dict = Field(default_factory=dict)
 
 
 def create_app(db_path: str | None = None, demo: bool | None = None, ingest_key: str | None = None,
                demo_days: int | None = None, live_demo: bool = True) -> FastAPI:
-    demo = (os.getenv("DEMO_MODE", "false").lower() in ("1", "true", "yes")) if demo is None else demo
-    db_path = db_path or os.getenv("DB_PATH") or ("data/demo.db" if demo else "data/energy.db")
+    explicit_db = db_path or os.getenv("DB_PATH")
+    data_dir = Path(os.getenv("DATA_DIR", "data"))
+    mode_file = data_dir / "mode.json"
+    if demo is None:
+        demo = os.getenv("DEMO_MODE", "false").lower() in ("1", "true", "yes")
+        if not explicit_db:                      # a choice made in the app wins over the env default
+            try:
+                demo = bool(json.loads(mode_file.read_text())["demo"])
+            except Exception:
+                pass
     ingest_key = os.getenv("INGEST_KEY", "") if ingest_key is None else ingest_key
     demo_days = int(os.getenv("DEMO_DAYS", "45")) if demo_days is None else demo_days
     default_tz = os.getenv("TIMEZONE", DEFAULT_CONFIG["timezone"])
 
-    store = Store(db_path)
+    def path_for(is_demo: bool) -> str:
+        return explicit_db or str(data_dir / ("demo.db" if is_demo else "energy.db"))
+
+    class Holder:
+        pass
+
+    holder = Holder()
+    holder.demo = demo
+    holder.store = Store(path_for(demo))
+    holder.task = None
+    holder.switching = asyncio.Lock()
+
+    class StoreRef:
+        """Always points at the current store, so a mode switch needs no other changes."""
+        def __getattr__(self, name):
+            return getattr(holder.store, name)
+
+    store = StoreRef()
 
     def load_config() -> dict:
         saved = store.get_setting("config")
@@ -65,21 +95,29 @@ def create_app(db_path: str | None = None, demo: bool | None = None, ingest_key:
         except ConfigError:
             return validate(base)
 
+    async def start_demo():
+        """Seed the demo database if empty and start the live simulator."""
+        st = holder.store
+        cfg = load_config()
+        if st.count() == 0:
+            await asyncio.to_thread(simulator.backfill, st, cfg["timezone"], demo_days)
+            labels = dict(cfg["labels"])
+            labels.update(simulator.DEMO_LABELS)
+            st.set_setting("config", {**(st.get_setting("config") or {}), "labels": labels})
+        if live_demo:
+            holder.task = asyncio.create_task(simulator.live_loop(st, cfg["timezone"]))
+
+    async def stop_demo():
+        if holder.task:
+            holder.task.cancel()
+            holder.task = None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = None
-        if demo:
-            cfg = load_config()
-            if store.count() == 0:
-                simulator.backfill(store, cfg["timezone"], demo_days)
-                labels = dict(cfg["labels"])
-                labels.update(simulator.DEMO_LABELS)
-                store.set_setting("config", {**(store.get_setting("config") or {}), "labels": labels})
-            if live_demo:
-                task = asyncio.create_task(simulator.live_loop(store, cfg["timezone"]))
+        if holder.demo:
+            await start_demo()
         yield
-        if task:
-            task.cancel()
+        await stop_demo()
 
     app = FastAPI(title="Home Energy Dashboard", lifespan=lifespan)
     app.state.store = store
@@ -101,7 +139,7 @@ def create_app(db_path: str | None = None, demo: bool | None = None, ingest_key:
     # ---------------------------------------------------------------- health
     @app.get("/api/health")
     def health():
-        return {"ok": True, "demo": demo, "samples": store.count(), "ingest_enabled": bool(ingest_key)}
+        return {"ok": True, "demo": holder.demo, "mode_locked": bool(explicit_db), "samples": store.count(), "ingest_enabled": bool(ingest_key)}
 
     # ---------------------------------------------------------------- ingest
     @app.post("/api/ingest", dependencies=[Depends(require_key)])
@@ -125,10 +163,26 @@ def create_app(db_path: str | None = None, demo: bool | None = None, ingest_key:
                 raise HTTPException(422, f"Timestamp out of range for {ch}")
         return {"stored": store.ingest(items)}
 
+    # ---------------------------------------------------------------- mode
+    @app.post("/api/mode")
+    async def set_mode(body: ModeBody):
+        if explicit_db:
+            raise HTTPException(409, "Mode is fixed because DB_PATH is set on the server.")
+        async with holder.switching:
+            if body.demo != holder.demo:
+                await stop_demo()
+                holder.store = Store(path_for(body.demo))
+                holder.demo = body.demo
+                data_dir.mkdir(parents=True, exist_ok=True)
+                mode_file.write_text(json.dumps({"demo": body.demo}))
+                if body.demo:
+                    await start_demo()
+        return {"demo": holder.demo}
+
     # ---------------------------------------------------------------- config
     @app.get("/api/config")
     def get_config():
-        return {"config": load_config(), "defaults": DEFAULT_CONFIG, "demo": demo}
+        return {"config": load_config(), "defaults": DEFAULT_CONFIG, "demo": holder.demo}
 
     @app.put("/api/config")
     def put_config(body: ConfigBody):

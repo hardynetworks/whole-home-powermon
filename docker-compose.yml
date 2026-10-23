@@ -3,12 +3,12 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${PORT:-8855}:8080"
     volumes:
       - energy-data:/srv/data      # demo.db (demo mode) and energy.db (real data) live here
     environment:
       TIMEZONE: ${TIMEZONE:-America/Boise}
-      DEMO_MODE: ${DEMO_MODE:-true}     # simulated data; set to false for real readings
+      DEMO_MODE: ${DEMO_MODE:-true}     # first-run default; the in-app switch overrides it afterwards
       INGEST_KEY: ${INGEST_KEY:-}       # required for the collector to send readings
 volumes:
   energy-data:

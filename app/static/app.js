@@ -202,14 +202,15 @@ async function viewOverview() {
       const next = t.next ? `Next: ${TIER_LABEL[t.next.tier]} ${fmtDayTime(t.next.at)} at ${cents(t.next.rate, 2)}` : '';
       const sub = [t.holiday ? 'Holiday: off-peak all day' : null, next].filter(Boolean).join(' · ');
       const tot = L.today.totals;
-      tiles.replaceChildren(
+      tiles.replaceChildren(...[
         tile('Home using', css('--c-load'), powerValue(L.load), L.load == null ? 'Waiting for data' : 'Right now'),
         tile('Grid', css('--c-grid'), powerValue(L.grid, true), gridSub),
         L.solar != null ? tile('Solar', css('--c-solar'), powerValue(L.solar), L.solar > 20 ? 'Producing' : 'Not producing') : null,
         L.battery != null ? tile('Battery', css('--c-battery'), powerValue(L.battery, true), battSub) : null,
         tile('Rate now', tierColor(t.tier), h('span', null, cents(t.rate, 2), h('small', null, '/kWh')),
           h('span', null, h('span', { class: `pill ${t.tier}` }, t.label), sub ? ' ' : '', h('span', null, sub))),
-        tile('Today so far', null, h('span', null, money(tot.estimated_bill)), `${kwh(tot.import_kwh)} bought from the grid`));
+        tile('Today so far', null, h('span', null, money(tot.estimated_bill)), `${kwh(tot.import_kwh)} bought from the grid`),
+      ].filter(Boolean));
     } catch (e) {
       banner.replaceChildren(errBox(e));
     }
@@ -273,11 +274,12 @@ async function viewOverview() {
       dayNote.replaceChildren(D.summary.has_data ? '' : h('p', { class: 'muted' }, 'No readings for this day. The shading still shows when each rate applies.'));
 
       const T = D.summary.totals;
-      daySummary.replaceChildren(
+      daySummary.replaceChildren(...[
         tile('Estimated cost', null, money(T.estimated_bill), `${D.plan}`),
         tile('Bought from grid', css('--c-grid'), kwh(T.import_kwh)),
         tile('Home used', css('--c-load'), kwh(T.load_kwh)),
-        T.solar_kwh > 0 ? tile('Solar made', css('--c-solar'), kwh(T.solar_kwh), `Saved about ${money(T.solar_value)}`) : null);
+        T.solar_kwh > 0 ? tile('Solar made', css('--c-solar'), kwh(T.solar_kwh), `Saved about ${money(T.solar_value)}`) : null,
+      ].filter(Boolean));
 
       const tiers = Object.entries(D.summary.by_tier);
       tierBox.replaceChildren(...(T.import_kwh > 0
@@ -394,7 +396,7 @@ async function viewReports() {
       }
     }
 
-    out.replaceChildren(
+    out.replaceChildren(...[
       h('div', { class: 'grid tiles' },
         tile('Estimated bill', null, money(T.estimated_bill), `${S.plan} · ${shortDate(R.start_date)} to ${shortDate(R.end_date)}`),
         tile('Bought from grid', css('--c-grid'), kwh(T.import_kwh), T.import_kwh > 0 ? `Average ${cents(T.energy_cost / T.import_kwh, 2)}/kWh` : ''),
@@ -441,7 +443,8 @@ async function viewReports() {
             h('td', null, p.name, p.active ? h('span', { class: 'badge', style: { marginLeft: '8px' } }, 'In use') : null),
             h('td', { class: 'num' }, money(p.energy_cost)),
             h('td', { class: 'num' }, p.id === R.compare.baseline ? 'baseline' : `${p.vs_standard > 0 ? '+' : ''}${money(p.vs_standard)}`)))))),
-        h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'Same usage priced on each plan, energy charges only. Fixed charges, riders and any trial protection on a plan, such as a bill cap, are not modeled. The Standard plan here is a flat estimate unless you add its usage blocks on the Rates page.')) : null);
+        h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'Same usage priced on each plan, energy charges only. Fixed charges, riders and any trial protection on a plan, such as a bill cap, are not modeled. The Standard plan here is a flat estimate unless you add its usage blocks on the Rates page.')) : null,
+    ].filter(Boolean));
 
     const days = S.by_day;
     makeChart('cost', bar1, {
@@ -616,9 +619,17 @@ async function viewDevices() {
           state.cfg = res.config; status.className = 'small ok'; status.textContent = 'Saved';
         } catch (e) { status.className = 'small err'; status.textContent = e.message; }
       } }, 'Save names'), status) : null),
+    h('section', { class: 'card' }, h('h2', null, 'Data source'),
+      h('p', null, H.demo ? 'Showing simulated demo data.' : 'Showing your real readings.'),
+      h('p', { class: 'muted small' }, 'Demo and real data are stored separately, so switching never mixes or deletes either one.'),
+      H.mode_locked ? h('p', { class: 'muted small' }, 'The mode is fixed because DB_PATH is set on the server.')
+        : h('div', { class: 'row' }, h('button', { type: 'button', class: 'primary', onclick: async (e) => {
+          e.target.disabled = true;
+          try { await setMode(!H.demo); } catch (err) { main.replaceChildren(errBox(err)); }
+        } }, H.demo ? 'Switch to real data' : 'Switch to demo data'))),
     h('section', { class: 'card' }, h('h2', null, 'Send readings'),
       H.ingest_enabled ? null : h('div', { class: 'notice warn', style: { margin: '10px 0' } }, 'Ingest is off. Set the INGEST_KEY environment variable on the server and restart it to accept readings from the collector.'),
-      H.demo ? h('div', { class: 'notice', style: { margin: '10px 0' } }, 'Demo mode is on, so the numbers are simulated. Set DEMO_MODE=false to use real readings.') : null,
+      H.demo ? h('div', { class: 'notice', style: { margin: '10px 0' } }, 'Demo mode is on, so the numbers are simulated.') : null,
       h('p', { class: 'muted' }, 'The collector posts watts to the server. Positive grid watts mean importing, negative mean exporting. Battery watts are positive while charging.'),
       h('pre', null, snippet),
       h('div', { class: 'table-wrap', style: { marginTop: '10px' } }, h('table', null,
@@ -630,6 +641,15 @@ async function viewDevices() {
           ['circuit:<name>', 'A monitored circuit, such as circuit:hvac'],
           ['device:<name>', 'A smart plug or single appliance'],
         ].map(([a, b]) => h('tr', null, h('td', null, h('code', null, a)), h('td', null, b)))))))));
+}
+
+/* ------------------------------------------------------------------ demo / real mode */
+async function setMode(demo) {
+  await api('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ demo }) });
+  const c = await api('/api/config');
+  state.cfg = c.config; state.tz = c.config.timezone; state.demo = c.demo;
+  document.getElementById('demo-badge').hidden = !c.demo;
+  route();
 }
 
 /* ------------------------------------------------------------------ router and theme */
@@ -659,6 +679,11 @@ document.getElementById('theme').addEventListener('click', () => {
   route();
 });
 window.addEventListener('hashchange', route);
+document.getElementById('demo-badge').addEventListener('click', async (e) => {
+  e.target.disabled = true; e.target.textContent = 'Switching…';
+  try { await setMode(false); } catch (err) { main.replaceChildren(errBox(err)); }
+  e.target.disabled = false; e.target.textContent = 'Demo data · switch to real';
+});
 
 (async () => {
   try {
