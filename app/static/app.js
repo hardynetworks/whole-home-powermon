@@ -105,6 +105,16 @@ function setChartDefaults() {
 }
 const errBox = (e) => h('div', { class: 'notice err', role: 'alert' }, e.message || String(e));
 const loading = () => h('p', { class: 'muted' }, 'Loading…');
+const ICONS = {
+  bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
+  curve: '<path d="M4 4v16h16"/><path d="M6 6c1 8 4 11 12 11"/>',
+  receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+};
+function icon(name) {
+  const span = document.createElement('span');
+  span.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  return span.firstChild;
+}
 
 /* ------------------------------------------------------------------ chart plugin: rate-tier shading */
 const bandPlugin = {
@@ -292,7 +302,8 @@ let liveCleanup = null;
 async function viewOverview() {
   let day = todayStr();
   const banner = h('div');
-  const tiles = h('div', { class: 'grid tiles', 'aria-live': 'off' });
+  const features = h('div', { class: 'features' });
+  const kpis = h('div', { class: 'kpis' });
   const dayTitle = h('h2', null, 'Power');
   const dateInput = h('input', { type: 'date', 'aria-label': 'Day to show', value: day, onchange: () => { if (dateInput.value) { day = dateInput.value; loadDay(); } } });
   const canvas = h('canvas', { role: 'img', 'aria-label': 'Power over the day, shaded by electricity rate tier' });
@@ -304,19 +315,28 @@ async function viewOverview() {
 
   const liveNode = liveGraph();
   const shift = (n) => { day = addDays(day, n); dateInput.value = day; loadDay(); };
+  const hour = Number(tzFmt({ hour: 'numeric', hour12: false }).format(new Date())) % 24;
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   main.replaceChildren(h('div', { class: 'stack' },
-    banner, tiles, liveNode,
-    h('section', { class: 'card' },
-      h('div', { class: 'row between' },
-        dayTitle,
-        h('div', { class: 'row' },
-          h('button', { type: 'button', 'aria-label': 'Previous day', onclick: () => shift(-1) }, '‹'),
-          dateInput,
-          h('button', { type: 'button', 'aria-label': 'Next day', onclick: () => shift(1) }, '›'),
-          h('button', { type: 'button', onclick: () => { day = todayStr(); dateInput.value = day; loadDay(); } }, 'Today'))),
-      dayNote,
-      h('div', { class: 'chart-box' }, canvas),
-      legend),
+    banner,
+    h('div', { class: 'dash' },
+      h('section', { class: 'card welcome' },
+        h('h1', null, `${greeting}!`),
+        h('p', { class: 'lede' }, 'Take a look at your home energy today'),
+        features),
+      kpis,
+      liveNode,
+      h('section', { class: 'card' },
+        h('div', { class: 'row between' },
+          dayTitle,
+          h('div', { class: 'row' },
+            h('button', { type: 'button', 'aria-label': 'Previous day', onclick: () => shift(-1) }, '‹'),
+            dateInput,
+            h('button', { type: 'button', 'aria-label': 'Next day', onclick: () => shift(1) }, '›'),
+            h('button', { type: 'button', onclick: () => { day = todayStr(); dateInput.value = day; loadDay(); } }, 'Today'))),
+        dayNote,
+        h('div', { class: 'chart-box' }, canvas),
+        legend)),
     h('section', { class: 'grid tiles' }, daySummary),
     h('div', { class: 'grid cols2' },
       h('section', { class: 'card' }, h('h2', null, 'Cost by rate tier'), tierBox),
@@ -334,17 +354,18 @@ async function viewOverview() {
       }
       const gridSub = L.grid == null ? '' : L.grid > 20 ? 'Importing from the utility' : L.grid < -20 ? 'Exporting to the utility' : 'Idle';
       const battSub = L.battery == null ? '' : L.battery > 20 ? 'Charging' : L.battery < -20 ? 'Discharging' : 'Idle';
-      const next = t.next ? `Next: ${TIER_LABEL[t.next.tier]} ${fmtDayTime(t.next.at)} at ${cents(t.next.rate, 2)}` : '';
-      const sub = [t.holiday ? 'Holiday: off-peak all day' : null, next].filter(Boolean).join(' · ');
       const tot = L.today.totals;
-      tiles.replaceChildren(...[
-        tile('Home using', css('--c-load'), powerValue(L.load), L.load == null ? 'Waiting for data' : 'Right now'),
+      const feature = (ico, label, value, sub) => h('div', { class: 'feature' }, icon(ico), h('span', { class: 'f-label' }, label), h('div', { class: 'f-value' }, value), sub ? h('div', { class: 'f-sub' }, sub) : null);
+      features.replaceChildren(
+        feature('bolt', 'Home using', powerValue(L.load), L.load == null ? 'Waiting for data' : 'Right now'),
+        feature('curve', 'Rate now', h('span', null, cents(t.rate, 2), h('small', null, '/kWh')),
+          h('span', null, h('span', { class: `pill ${t.tier}` }, t.label), t.holiday ? ' Holiday' : '')),
+        feature('receipt', 'Today so far', money(tot.estimated_bill), `${kwh(tot.import_kwh)} bought from the grid`));
+      kpis.replaceChildren(...[
         tile('Grid', css('--c-grid'), powerValue(L.grid, true), gridSub),
         L.solar != null ? tile('Solar', css('--c-solar'), powerValue(L.solar), L.solar > 20 ? 'Producing' : 'Not producing') : null,
         L.battery != null ? tile('Battery', css('--c-battery'), powerValue(L.battery, true), battSub) : null,
-        tile('Rate now', tierColor(t.tier), h('span', null, cents(t.rate, 2), h('small', null, '/kWh')),
-          h('span', null, h('span', { class: `pill ${t.tier}` }, t.label), sub ? ' ' : '', h('span', null, sub))),
-        tile('Today so far', null, h('span', null, money(tot.estimated_bill)), `${kwh(tot.import_kwh)} bought from the grid`),
+        t.next ? tile('Next rate change', tierColor(t.next.tier), h('span', null, TIER_LABEL[t.next.tier]), `${fmtDayTime(t.next.at)} at ${cents(t.next.rate, 2)}/kWh`) : null,
       ].filter(Boolean));
     } catch (e) {
       banner.replaceChildren(errBox(e));
@@ -724,6 +745,104 @@ async function viewRates() {
 }
 
 /* ------------------------------------------------------------------ DEVICES */
+/* ------------------------------------------------------------------ DEVICES: add and list */
+const SOURCE_LABEL = { tapo: 'Tapo smart plug', refoss: 'Refoss circuit', inverter: 'Solar inverter', other: 'Something else' };
+const KIND_LABEL = { device: 'Smart plug or appliance', circuit: 'Circuit or breaker' };
+const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+
+function collectorSnippet(devs) {
+  const sources = [];
+  const tapo = devs.filter((d) => d.source === 'tapo');
+  if (tapo.length) {
+    sources.push({ type: 'tapo', email: 'YOUR_TAPO_EMAIL', password: 'YOUR_TAPO_PASSWORD',
+      devices: Object.fromEntries(tapo.map((d) => [d.host || 'IP_ADDRESS', d.id])) });
+  }
+  const ref = devs.filter((d) => d.source === 'refoss');
+  if (ref.length) {
+    sources.push({ type: 'refoss', host: (ref.find((d) => d.host) || {}).host || 'IP_ADDRESS',
+      circuits: Object.fromEntries(ref.map((d) => [`CHANNEL_NUMBER_FOR_${d.id}`, d.id])) });
+  }
+  return sources;
+}
+
+function deviceManager(C, rerender) {
+  const devs = (state.cfg.devices || []).map((d) => ({ ...d }));
+  const byChannel = Object.fromEntries(C.channels.map((c) => [c.channel, c]));
+  const status = h('span', { role: 'status', class: 'small' });
+
+  async function save(nextDevs, nextLabels) {
+    status.className = 'small'; status.textContent = 'Saving…';
+    try {
+      const res = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: { devices: nextDevs, labels: nextLabels } }) });
+      state.cfg = res.config;
+      rerender();
+    } catch (e) { status.className = 'small err'; status.textContent = e.message; }
+  }
+
+  const nameIn = h('input', { type: 'text', maxlength: '60', placeholder: 'Freezer plug', 'aria-label': 'Device name', required: true });
+  const hostIn = h('input', { type: 'text', maxlength: '100', placeholder: '192.168.1.60', 'aria-label': 'IP address or host name' });
+  const sourceSel = h('select', { 'aria-label': 'What it connects through', onchange: () => syncKind() },
+    ['tapo', 'refoss', 'other'].map((k) => h('option', { value: k }, SOURCE_LABEL[k])));
+  const kindSel = h('select', { 'aria-label': 'Type of device' },
+    Object.entries(KIND_LABEL).map(([k, v]) => h('option', { value: k }, v)));
+  const hint = h('p', { class: 'muted small' });
+  function syncKind() {
+    const src = sourceSel.value;
+    if (src === 'tapo') { kindSel.value = 'device'; kindSel.disabled = true; hint.textContent = 'Smart plugs report one device each. Enter the plug\'s IP address.'; }
+    else if (src === 'refoss') { kindSel.value = 'circuit'; kindSel.disabled = true; hint.textContent = 'Circuits come from the Refoss EM16P. Enter its IP address (shared by all its circuits).'; }
+    else { kindSel.disabled = false; hint.textContent = 'For anything else, your own script sends readings to the Ingest API with this device\'s channel name.'; }
+  }
+  syncKind();
+
+  const form = h('form', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', alignItems: 'end' }, onsubmit: (e) => {
+    e.preventDefault();
+    const name = nameIn.value.trim();
+    let id = slug(name);
+    if (!id) { status.className = 'small err'; status.textContent = 'Give the device a name using letters or numbers.'; return; }
+    const kind = kindSel.value;
+    const base = id; let n = 2;
+    while (devs.some((d) => d.kind === kind && d.id === id)) id = `${base}_${n++}`;
+    const labels = { ...(state.cfg.labels || {}), [`${kind}:${id}`]: name };
+    save([...devs, { id, name, kind, source: sourceSel.value, host: hostIn.value.trim() }], labels);
+  } },
+  h('label', { class: 'field' }, 'Name', nameIn),
+  h('label', { class: 'field' }, 'Connects through', sourceSel),
+  h('label', { class: 'field' }, 'Type', kindSel),
+  h('label', { class: 'field' }, 'IP address', hostIn),
+  h('div', null, h('button', { type: 'submit', class: 'primary' }, 'Add device')));
+
+  const rows = devs.map((d) => {
+    const ch = `${d.kind}:${d.id}`;
+    const seen = byChannel[ch];
+    return h('tr', null,
+      h('td', null, d.name),
+      h('td', null, h('code', null, ch)),
+      h('td', null, SOURCE_LABEL[d.source] || d.source, d.host ? h('span', { class: 'muted' }, ` · ${d.host}`) : null),
+      h('td', null, h('span', { class: `status-dot${seen && seen.online ? ' live' : ''}` }), !seen ? 'Waiting for first reading' : seen.online ? 'Receiving' : 'Quiet'),
+      h('td', { class: 'num' }, h('button', { type: 'button', 'aria-label': `Remove ${d.name}`, onclick: () => {
+        const labels = { ...(state.cfg.labels || {}) }; delete labels[ch];
+        save(devs.filter((x) => x !== d && !(x.id === d.id && x.kind === d.kind)), labels);
+      } }, 'Remove')));
+  });
+  const snippets = collectorSnippet(devs);
+
+  return h('section', { class: 'card' },
+    h('h2', null, 'Your devices'),
+    rows.length ? h('div', { class: 'table-wrap' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Channel'), h('th', null, 'Connects through'), h('th', null, 'Status'), h('th', null, ''))),
+      h('tbody', null, rows)))
+      : h('p', { class: 'muted' }, 'No devices added yet. Add a smart plug or circuit below.'),
+    h('h3', { style: { margin: '14px 0 8px' } }, 'Add a device'),
+    form, hint, status,
+    snippets.length ? h('div', { style: { marginTop: '12px' } },
+      h('h3', { style: { marginBottom: '6px' } }, 'Collector settings for these devices'),
+      h('p', { class: 'muted small' }, 'Add these entries to "sources" in collector.json on the Raspberry Pi. Removing a device here does not delete its saved history.'),
+      h('pre', null, JSON.stringify(snippets, null, 2)),
+      h('p', { class: 'muted small', style: { marginTop: '6px' } }, 'The Tapo and Refoss readers in the collector are not finished yet (see the files in collector/sources), so a device shows "Waiting for first reading" until they are.'))
+      : null);
+}
+
 async function viewDevices() {
   main.replaceChildren(loading());
   let C; let H;
@@ -737,6 +856,7 @@ async function viewDevices() {
   -d '{"readings": {"grid": 1250, "solar": 0, "circuit:hvac": 640, "device:desk_plug": 85}}'`;
 
   main.replaceChildren(h('div', { class: 'stack' },
+    deviceManager(C, viewDevices),
     h('section', { class: 'card' }, h('h2', null, 'Channels'),
       C.channels.length ? h('div', { class: 'table-wrap' }, h('table', null,
         h('thead', null, h('tr', null, h('th', null, 'Channel'), h('th', null, 'Name shown'), h('th', null, 'Last reading'), h('th', null, 'Status'))),
@@ -807,13 +927,14 @@ function applyTheme(t) {
 }
 try { applyTheme(localStorage.getItem('theme')); } catch (_) { /* storage blocked */ }
 document.getElementById('theme').addEventListener('click', () => {
-  const dark = css('--bg') === '#121715';
+  const dark = document.documentElement.getAttribute('data-theme') !== 'light';
   const next = dark ? 'light' : 'dark';
   applyTheme(next);
   try { localStorage.setItem('theme', next); } catch (_) { /* ignore */ }
   route();
 });
 window.addEventListener('hashchange', route);
+document.getElementById('refresh').addEventListener('click', () => route());
 document.getElementById('demo-badge').addEventListener('click', async (e) => {
   e.target.disabled = true; e.target.textContent = 'Switching…';
   try { await setMode(false); } catch (err) { main.replaceChildren(errBox(err)); }

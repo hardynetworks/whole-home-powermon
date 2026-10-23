@@ -7,6 +7,7 @@ as published on its Time-of-Use page (energy charge only).
 from __future__ import annotations
 
 import copy
+import re
 from zoneinfo import ZoneInfo
 
 DEFAULT_CONFIG: dict = {
@@ -45,6 +46,9 @@ DEFAULT_CONFIG: dict = {
     "export_credit_per_kwh": 0.0,
     # Friendly names: {"circuit:hvac": "Heating and cooling"}
     "labels": {},
+    # Devices added on the Devices page: {"id", "name", "kind": circuit|device, "source", "host"}.
+    # This is a registry for the dashboard; the collector still has to send their readings.
+    "devices": [],
 }
 
 TIER_NAMES = {"on": "On-peak", "mid": "Mid-peak", "off": "Off-peak"}
@@ -72,6 +76,44 @@ def _num(value, name: str, minimum: float = 0.0) -> float:
     if number < minimum:
         raise ConfigError(f"{name} must be at least {minimum}")
     return number
+
+
+DEVICE_KINDS = ("circuit", "device")
+DEVICE_SOURCES = ("refoss", "tapo", "inverter", "other")
+_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,40}$")
+
+
+def _clean_devices(devices) -> list:
+    if devices in (None, ""):
+        return []
+    if not isinstance(devices, list):
+        raise ConfigError("devices must be a list")
+    out, seen = [], set()
+    for i, d in enumerate(devices, 1):
+        if not isinstance(d, dict):
+            raise ConfigError(f"Device {i} must be an object")
+        did = str(d.get("id", "")).strip()
+        name = str(d.get("name", "")).strip()
+        kind, source = d.get("kind"), d.get("source", "other")
+        host = str(d.get("host", "")).strip()
+        if not _ID_RE.match(did):
+            raise ConfigError(f"Device {i}: id may use letters, numbers, dot, dash and underscore (max 40)")
+        if not 1 <= len(name) <= 60:
+            raise ConfigError(f"Device {i}: name must be 1 to 60 characters")
+        if kind not in DEVICE_KINDS:
+            raise ConfigError(f"Device {i}: kind must be one of {', '.join(DEVICE_KINDS)}")
+        if source not in DEVICE_SOURCES:
+            raise ConfigError(f"Device {i}: source must be one of {', '.join(DEVICE_SOURCES)}")
+        if len(host) > 100:
+            raise ConfigError(f"Device {i}: host is too long")
+        channel = f"{kind}:{did}"
+        if channel in seen:
+            raise ConfigError(f"Device {channel} is listed twice")
+        seen.add(channel)
+        out.append({"id": did, "name": name, "kind": kind, "source": source, "host": host})
+    if len(out) > 100:
+        raise ConfigError("At most 100 devices")
+    return out
 
 
 def validate(cfg: dict) -> dict:
@@ -128,4 +170,5 @@ def validate(cfg: dict) -> dict:
     cfg["export_credit_per_kwh"] = _num(cfg["export_credit_per_kwh"], "export_credit_per_kwh")
     if not isinstance(cfg.get("labels"), dict):
         raise ConfigError("labels must be an object")
+    cfg["devices"] = _clean_devices(cfg.get("devices"))
     return cfg

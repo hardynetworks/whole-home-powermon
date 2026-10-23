@@ -325,3 +325,14 @@ def test_live_history_returns_raw_points(client):
     assert pts[-1]["load"] == 1404
     newer = client.get(f"/api/live/history?since={pts[-2]['t']}").json()["points"]
     assert len(newer) == 1
+
+
+def test_devices_registry_validates_and_saves(client):
+    dev = {"id": "desk_plug", "name": "Desk plug", "kind": "device", "source": "tapo", "host": "192.168.1.60"}
+    r = client.put("/api/config", json={"config": {"devices": [dev], "labels": {"device:desk_plug": "Desk plug"}}})
+    assert r.status_code == 200
+    assert client.get("/api/config").json()["config"]["devices"] == [dev]
+    bad = client.put("/api/config", json={"config": {"devices": [dev, dev]}})
+    assert bad.status_code == 422 and "twice" in bad.json()["detail"]
+    for broken in ({**dev, "id": "bad id!"}, {**dev, "kind": "grid"}, {**dev, "name": ""}, {**dev, "source": "zigbee"}):
+        assert client.put("/api/config", json={"config": {"devices": [broken]}}).status_code == 422

@@ -75,3 +75,9 @@ DEMO_MODE=true uvicorn app.main:create_app --factory --port 8080
 
 Rates are stored in dollars per kWh and shown in cents. Defaults come from Idaho Power's Time-of-Use page
 (Mon to Sat; Sundays and listed holidays are off-peak). Verify them against your own bill.
+
+## Credits
+
+Visual style is based on the "Power BI Dashboard Template Case" community file on Figma (layout, colors, card styling).
+Its Spotify branding and artwork are not used. Open Sans is bundled under the SIL Open Font License (`app/static/fonts/OFL-OpenSans.txt`).
+Charts use Chart.js (MIT).
